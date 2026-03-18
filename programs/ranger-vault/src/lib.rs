@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 
-declare_id!("11111111111111111111111111111111"); // Replace after deploy
+declare_id!(" 88XsFwcGtKuYMwvF8aQVshHSWCBYtYrPmgqMvK59XAUX"); // Replace after deploy
 
 // ─────────────────────────────────────────────
 //  PROGRAM ENTRY POINT
