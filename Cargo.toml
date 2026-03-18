@@ -1,20 +1,13 @@
-[package]
-name = "ranger-vault"
-version = "0.1.0"
-description = "Funding Rate Arbitrage Vault"
-edition = "2021"
+[workspace]
+members = [
+    "programs/*"
+]
+resolver = "2"
 
-[lib]
-crate-type = ["cdylib", "lib"]
-name = "ranger_vault"
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
 
-[features]
-no-entrypoint = []
-no-idl = []
-no-log-ix-name = []
-cpi = ["no-entrypoint"]
-default = []
-
-[dependencies]
-anchor-lang = { version = "0.30.1", features = ["init-if-needed"] }
-anchor-spl = { version = "0.30.1", features = ["token"] }
+[profile.dev]
+overflow-checks = true
