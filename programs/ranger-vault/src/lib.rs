@@ -99,79 +99,84 @@ pub mod ranger_vault {
 
     /// User withdraws USDC by burning shares
     pub fn withdraw(ctx: Context<Withdraw>, shares_to_burn: u64) -> Result<()> {
-        let vault = &mut ctx.accounts.vault_state;
-        let user_pos = &mut ctx.accounts.user_position;
+    // Read all values FIRST before any mutable borrow
+    let manager_key = ctx.accounts.vault_state.manager;
+    let bump = ctx.accounts.vault_state.bump;
+    let total_usdc = ctx.accounts.vault_state.total_usdc;
+    let total_shares = ctx.accounts.vault_state.total_shares;
+    let performance_fee_bps = ctx.accounts.vault_state.performance_fee_bps;
+    let user_shares = ctx.accounts.user_position.shares;
+    let user_deposited = ctx.accounts.user_position.deposited_usdc;
 
-        require!(!vault.is_paused, VaultError::VaultPaused);
-        require!(shares_to_burn > 0, VaultError::ZeroAmount);
-        require!(user_pos.shares >= shares_to_burn, VaultError::InsufficientShares);
-        require!(vault.total_shares > 0, VaultError::ZeroShares);
+    require!(!ctx.accounts.vault_state.is_paused, VaultError::VaultPaused);
+    require!(shares_to_burn > 0, VaultError::ZeroAmount);
+    require!(user_shares >= shares_to_burn, VaultError::InsufficientShares);
+    require!(total_shares > 0, VaultError::ZeroShares);
 
-        // Calculate USDC to return
-        // usdc_out = shares * total_usdc / total_shares
-        let usdc_out = (shares_to_burn as u128)
-            .checked_mul(vault.total_usdc as u128)
+    // Calculate USDC to return
+    let usdc_out = (shares_to_burn as u128)
+        .checked_mul(total_usdc as u128)
+        .unwrap()
+        .checked_div(total_shares as u128)
+        .unwrap() as u64;
+
+    require!(usdc_out > 0, VaultError::ZeroAmount);
+
+    // Performance fee
+    let cost_basis = (shares_to_burn as u128)
+        .checked_mul(user_deposited as u128)
+        .unwrap()
+        .checked_div(user_shares as u128)
+        .unwrap() as u64;
+
+    let fee = if usdc_out > cost_basis {
+        let profit = usdc_out - cost_basis;
+        (profit as u128)
+            .checked_mul(performance_fee_bps as u128)
             .unwrap()
-            .checked_div(vault.total_shares as u128)
-            .unwrap() as u64;
+            .checked_div(10000)
+            .unwrap() as u64
+    } else {
+        0
+    };
 
-        require!(usdc_out > 0, VaultError::ZeroAmount);
+    let usdc_to_user = usdc_out.checked_sub(fee).unwrap();
 
-        // Performance fee — only on profit
-        let cost_basis = (shares_to_burn as u128)
-            .checked_mul(user_pos.deposited_usdc as u128)
-            .unwrap()
-            .checked_div(user_pos.shares as u128)
-            .unwrap() as u64;
+    // Transfer USDC — use vault_state key for seeds
+    let seeds = &[b"vault", manager_key.as_ref(), &[bump]];
+    let signer = &[&seeds[..]];
 
-        let fee = if usdc_out > cost_basis {
-            let profit = usdc_out - cost_basis;
-            (profit as u128)
-                .checked_mul(vault.performance_fee_bps as u128)
-                .unwrap()
-                .checked_div(10000)
-                .unwrap() as u64
-        } else {
-            0
-        };
+    let cpi_accounts = Transfer {
+        from: ctx.accounts.vault_usdc_account.to_account_info(),
+        to: ctx.accounts.user_usdc_account.to_account_info(),
+        authority: ctx.accounts.vault_state.to_account_info(),
+    };
+    let cpi_ctx = CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(),
+        cpi_accounts,
+        signer,
+    );
+    token::transfer(cpi_ctx, usdc_to_user)?;
 
-        let usdc_to_user = usdc_out.checked_sub(fee).unwrap();
+    // NOW update state — mutable borrows happen here
+    let vault = &mut ctx.accounts.vault_state;
+    vault.total_usdc = vault.total_usdc.checked_sub(usdc_out).unwrap();
+    vault.total_shares = vault.total_shares.checked_sub(shares_to_burn).unwrap();
 
-        // Transfer USDC to user (vault signs via PDA)
-        let seeds = &[b"vault", vault.manager.as_ref(), &[vault.bump]];
-        let signer = &[&seeds[..]];
+    let user_pos = &mut ctx.accounts.user_position;
+    user_pos.shares = user_pos.shares.checked_sub(shares_to_burn).unwrap();
+    user_pos.deposited_usdc = user_pos.deposited_usdc.saturating_sub(cost_basis);
 
-        let cpi_accounts = Transfer {
-            from: ctx.accounts.vault_usdc_account.to_account_info(),
-            to: ctx.accounts.user_usdc_account.to_account_info(),
-            authority: ctx.accounts.vault_state.to_account_info(),
-        };
-        let cpi_ctx = CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            cpi_accounts,
-            signer,
-        );
-        token::transfer(cpi_ctx, usdc_to_user)?;
+    emit!(Withdrawn {
+        user: ctx.accounts.user.key(),
+        shares_burned: shares_to_burn,
+        usdc_returned: usdc_to_user,
+        fee_charged: fee,
+    });
 
-        // Update vault state
-        vault.total_usdc = vault.total_usdc.checked_sub(usdc_out).unwrap();
-        vault.total_shares = vault.total_shares.checked_sub(shares_to_burn).unwrap();
-
-        // Update user position
-        user_pos.shares = user_pos.shares.checked_sub(shares_to_burn).unwrap();
-        user_pos.deposited_usdc = user_pos.deposited_usdc.saturating_sub(cost_basis);
-
-        emit!(Withdrawn {
-            user: ctx.accounts.user.key(),
-            shares_burned: shares_to_burn,
-            usdc_returned: usdc_to_user,
-            fee_charged: fee,
-        });
-
-        msg!("Withdrew {} USDC, burned {} shares, fee {}", usdc_to_user, shares_to_burn, fee);
-        Ok(())
-    }
-
+    msg!("Withdrew {} USDC, burned {} shares, fee {}", usdc_to_user, shares_to_burn, fee);
+    Ok(())
+}
     /// Strategy executor: record a position opening (actual Drift CPI in keeper bot)
     pub fn open_position(
         ctx: Context<ManageStrategy>,
