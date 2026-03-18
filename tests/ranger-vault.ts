@@ -1,6 +1,6 @@
+
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { RangerVault } from "../target/deploy/ranger_vault-keypair.json"; // Adjust path as needed
 import {
   Keypair,
   PublicKey,
