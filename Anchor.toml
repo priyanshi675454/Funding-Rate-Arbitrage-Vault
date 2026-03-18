@@ -3,10 +3,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-ranger_vault = " 88XsFwcGtKuYMwvF8aQVshHSWCBYtYrPmgqMvK59XAUX"
+ranger_vault = "88XsFwcGtKuYMwvF8aQVshHSWCBYtYrPmgqMvK59XAUX"
 
 [programs.devnet]
-ranger_vault = " 88XsFwcGtKuYMwvF8aQVshHSWCBYtYrPmgqMvK59XAUX"
+ranger_vault = "88XsFwcGtKuYMwvF8aQVshHSWCBYtYrPmgqMvK59XAUX"
 
 [registry]
 url = "https://api.apr.dev"
